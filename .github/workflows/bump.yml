@@ -1,4 +1,4 @@
-name: Bump cask on FreeTube release
+name: Bump cask on release
 on:
   schedule:
     - cron: "0 */6 * * *"
@@ -16,15 +16,60 @@ jobs:
       - name: Install jq (for JSON parsing)
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      - name: Setup environment
+        id: setup
+        run: |
+          # Find the cask file
+          CASK_FILE=$(find Casks -name "*.rb" -type f | head -1)
+          if [ -z "$CASK_FILE" ]; then
+            echo "Error: No cask file found in Casks/ directory"
+            exit 1
+          fi
+          echo "cask_file=$CASK_FILE" >> $GITHUB_OUTPUT
+          
+          # Extract app name from cask file
+          APP_NAME=$(grep '^[[:space:]]*name ' "$CASK_FILE" | grep -o '"[^"]*"' | tr -d '"')
+          if [ -z "$APP_NAME" ]; then
+            # Fallback: use cask filename without .rb extension
+            APP_NAME=$(basename "$CASK_FILE" .rb)
+          fi
+          echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+
       - name: Update cask
         run: bash script/update_cask.sh
 
-      - name: Commit & push if changed
+      - name: Check for changes
+        id: changes
         run: |
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore: bump freetube cask to latest release"
-            git push
+          if git diff --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
           fi
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          
+          # Get the new version for commit message
+          NEW_VERSION=$(grep "version " "${{ steps.setup.outputs.cask_file }}" | grep -o '"[^"]*"' | tr -d '"')
+          git commit -m "🔧 chore: bump ${{ steps.setup.outputs.app_name }} to version $NEW_VERSION"
+          git push
+
+      - name: Create summary
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          NEW_VERSION=$(grep "version " "${{ steps.setup.outputs.cask_file }}" | grep -o '"[^"]*"' | tr -d '"')
+          echo "## 🚀 ${{ steps.setup.outputs.app_name }} Updated" >> $GITHUB_STEP_SUMMARY
+          echo "Successfully updated ${{ steps.setup.outputs.app_name }} to version **$NEW_VERSION**" >> $GITHUB_STEP_SUMMARY
+          echo "The cask has been automatically updated with the latest release." >> $GITHUB_STEP_SUMMARY
+
+      - name: No changes summary
+        if: steps.changes.outputs.changed == 'false'
+        run: |
+          CURRENT_VERSION=$(grep "version " "${{ steps.setup.outputs.cask_file }}" | grep -o '"[^"]*"' | tr -d '"')
+          echo "## ✅ Up to Date" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.setup.outputs.app_name }} is already at the latest version: **$CURRENT_VERSION**" >> $GITHUB_STEP_SUMMARY
